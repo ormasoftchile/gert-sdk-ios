@@ -18,7 +18,7 @@ public struct LoadedKit {
         actor: String,
         inputs: [String: Any] = [:]
     ) async throws -> RunSession {
-        guard runbooks.contains(where: { $0.name == runbook }) else {
+        guard let runbookEntry = runbooks.first(where: { $0.name == runbook }) else {
             throw KitError.runbookNotFound(runbook)
         }
         
@@ -27,11 +27,12 @@ public struct LoadedKit {
         let traceWriter = try TraceWriter(runID: runID)
         
         return RunSession(
-            runID: runID,
-            kitName: manifest.name,
+            runID:       runID,
+            kitName:     manifest.name,
             runbookName: runbook,
-            actor: actor,
-            executor: executor,
+            actor:       actor,
+            runbook:     runbookEntry,
+            executor:    executor,
             traceWriter: traceWriter
         )
     }
@@ -68,7 +69,7 @@ public struct CompletedRun {
     public let startedAt: Date
     public let completedAt: Date
     public let status: RunStatus
-    public let events: [RunEvent]
+    public let events: [RuntimeEvent]
 }
 
 public enum RunStatus: String, Codable {
