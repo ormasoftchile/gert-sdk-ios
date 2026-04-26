@@ -10,11 +10,13 @@ let package = Package(
     products: [
         .library(name: "GertSDK", targets: ["GertSDK"]),
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
+    ],
     targets: [
         .target(
             name: "GertSDK",
-            dependencies: [],
+            dependencies: ["Yams"],
             path: "Sources/GertSDK"
         ),
         .testTarget(

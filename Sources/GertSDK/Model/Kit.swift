@@ -59,17 +59,6 @@ public struct Dependency: Codable {
     }
 }
 
-/// RunbookEntry represents a runbook definition.
-public struct RunbookEntry: Codable {
-    public let name: String
-    public let description: String?
-    public let steps: [String]?
-    
-    enum CodingKeys: String, CodingKey {
-        case name, description, steps
-    }
-}
-
 /// CompletedRun represents a finished run ready to sync.
 public struct CompletedRun {
     public let runID: String

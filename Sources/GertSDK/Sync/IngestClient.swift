@@ -45,14 +45,16 @@ public class IngestClient {
         let encoder = JSONEncoder()
         encoder.outputFormatting = []
         
-        var lines: [Data] = []
-        for event in events {
+        var result = Data()
+        for (index, event) in events.enumerated() {
             let eventData = try encoder.encode(event)
-            lines.append(eventData)
+            result.append(eventData)
+            if index < events.count - 1 {
+                result.append(Data("\n".utf8))
+            }
         }
         
-        let jsonl = lines.map { $0 }.joined(separator: Data("\n".utf8))
-        return jsonl
+        return result
     }
 }
 

@@ -1,13 +1,16 @@
 import Foundation
+import Yams
 
 /// KitLoader handles loading and validating kit bundles.
 public struct KitLoader {
     
     /// Loads a kit from a local directory URL.
-    /// - Parameter url: URL to the .kit directory
+    /// - Parameters:
+    ///   - url: URL to the .kit directory
+    ///   - skipCapabilityCheck: If true, skip platform capability checks (for testing)
     /// - Returns: A fully loaded kit with all dependencies resolved
     /// - Throws: KitLoadError if manifest is missing, invalid, or dependencies cannot be resolved
-    public static func load(from url: URL) async throws -> LoadedKit {
+    public static func load(from url: URL, skipCapabilityCheck: Bool = false) async throws -> LoadedKit {
         // 1. Read manifest.json
         let manifestURL = url.appendingPathComponent("manifest.json")
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
@@ -28,7 +31,9 @@ public struct KitLoader {
         try validatePlatformImpls(tools: tools)
         
         // 6. Check capabilities
-        try await checkCapabilities(tools: tools)
+        if !skipCapabilityCheck {
+            try await checkCapabilities(tools: tools)
+        }
         
         // 7. Resolve dependencies eagerly
         // TODO: Implement dependency resolution
@@ -41,11 +46,65 @@ public struct KitLoader {
     }
     
     private static func loadRunbooks(from url: URL) throws -> [RunbookEntry] {
-        fatalError("Not yet implemented")
+        let fileManager = FileManager.default
+        
+        // Check if directory exists
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return []
+        }
+        
+        // Enumerate *.runbook.yaml files
+        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        
+        var runbooks: [RunbookEntry] = []
+        
+        for case let fileURL as URL in enumerator {
+            guard fileURL.pathExtension == "yaml" && fileURL.lastPathComponent.hasSuffix(".runbook.yaml") else {
+                continue
+            }
+            
+            // Read and parse YAML
+            let yamlString = try String(contentsOf: fileURL, encoding: .utf8)
+            let decoder = YAMLDecoder()
+            let runbook = try decoder.decode(RunbookEntry.self, from: yamlString)
+            runbooks.append(runbook)
+        }
+        
+        return runbooks
     }
     
     private static func loadTools(from url: URL) throws -> [ToolDefinition] {
-        fatalError("Not yet implemented")
+        let fileManager = FileManager.default
+        
+        // Check if directory exists
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw KitLoadError.manifestInvalid("tools/ directory missing")
+        }
+        
+        // Enumerate *.tool.yaml files
+        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil) else {
+            throw KitLoadError.manifestInvalid("Cannot enumerate tools/ directory")
+        }
+        
+        var tools: [ToolDefinition] = []
+        
+        for case let fileURL as URL in enumerator {
+            guard fileURL.pathExtension == "yaml" && fileURL.lastPathComponent.hasSuffix(".tool.yaml") else {
+                continue
+            }
+            
+            // Read and parse YAML
+            let yamlString = try String(contentsOf: fileURL, encoding: .utf8)
+            let decoder = YAMLDecoder()
+            let tool = try decoder.decode(ToolDefinition.self, from: yamlString)
+            tools.append(tool)
+        }
+        
+        return tools
     }
     
     private static func validatePlatformImpls(tools: [ToolDefinition]) throws {

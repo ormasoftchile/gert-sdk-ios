@@ -16,7 +16,7 @@ public struct GertSDK {
     /// Throws `KitLoadError.missingPlatformImpl` if any tool lacks an iOS impl.
     /// Throws `KitLoadError.missingCapability` if a required capability is unavailable.
     public static func loadKit(from url: URL) async throws -> LoadedKit {
-        fatalError("Not yet implemented")
+        try await KitLoader.load(from: url)
     }
     
     /// Loads a kit by name, downloading from the platform kit registry if needed.
