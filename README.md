@@ -176,6 +176,36 @@ class MyCustomHandler: GertToolHandler {
 PlatformHandlerRegistry.shared.register(MyCustomHandler())
 ```
 
+## Examples
+
+### Home Automation Example
+
+Complete end-to-end SwiftUI app demonstrating the full kit lifecycle:
+
+```
+Examples/HomeAutomationExample/
+├── Kitfile.yaml                      # Declares gert-domain-home dependency
+├── HomeAutomationApp.swift           # SwiftUI app entry point
+├── HomeAutomationViewModel.swift     # ObservableObject managing kit lifecycle
+├── ContentView.swift                 # UI with event streaming
+└── README.md                         # Setup and usage guide
+```
+
+**What it demonstrates:**
+- Kitfile.yaml → gert kit fetch → GertSDK.loadKit → kit.startRun flow
+- SwiftUI integration with async/await
+- Real-time event streaming to UI
+- Idiomatic iOS patterns (@Published, ObservableObject, Task)
+
+**How to run:**
+```bash
+cd Examples/HomeAutomationExample
+gert kit fetch  # Downloads gert-domain-home.kit bundle
+open ../../Package.swift  # Open in Xcode
+```
+
+See [Examples/HomeAutomationExample/README.md](Examples/HomeAutomationExample/README.md) for full details.
+
 ## Roadmap
 
 - [x] Core SDK structure and API surface
@@ -183,11 +213,11 @@ PlatformHandlerRegistry.shared.register(MyCustomHandler())
 - [x] Platform handler stubs
 - [x] JSONL trace writer
 - [x] Sync client (ingest API)
+- [x] HomeAutomationExample — full e2e SwiftUI demo
 - [ ] Local gert engine integration (Go via xcframework or Swift interpreter)
 - [ ] Full platform handler implementations
 - [ ] Background URLSession for kit pulls
 - [ ] Offline queue for run sync
-- [ ] Sample kits and demo app
 
 ## License
 

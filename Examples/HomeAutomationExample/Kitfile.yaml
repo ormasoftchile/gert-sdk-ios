@@ -1,0 +1,6 @@
+apiVersion: gert.kit/v1
+kits:
+  - name: gert-domain-home
+    version: ">=1.0.0"
+  - name: gert-mobile-platform
+    version: ">=1.0.0"
