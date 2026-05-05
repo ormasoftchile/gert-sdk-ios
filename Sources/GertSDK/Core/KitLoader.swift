@@ -27,11 +27,19 @@ public final class LoadedKit: @unchecked Sendable {
     public let directory: URL
     public let manifest: HomeKitManifest
     public let index: HomeKitIndex
+    /// Delegations decoded from property.json. Empty when the kit
+    /// has none or when property.json is absent/unreadable (the
+    /// loader is permissive — delegations are an optional layer).
+    public let delegations: [Delegation]
 
-    init(directory: URL, manifest: HomeKitManifest, index: HomeKitIndex) {
+    init(directory: URL,
+         manifest: HomeKitManifest,
+         index: HomeKitIndex,
+         delegations: [Delegation] = []) {
         self.directory = directory
         self.manifest = manifest
         self.index = index
+        self.delegations = delegations
     }
 
     public var routines: [HomeKitIndex.Entry] { index.routines }
@@ -47,6 +55,22 @@ public final class LoadedKit: @unchecked Sendable {
     public func runbook(for entry: HomeKitIndex.Entry) throws -> Runbook {
         let url = directory.appendingPathComponent(entry.path)
         return try Runbook.load(from: url)
+    }
+
+    /// Returns the active delegate for the given routine at `date`, or
+    /// nil when no delegation is active or the routine isn't covered.
+    /// Mirrors gert-domain-home/pkg/delegation/policy.go so the iOS
+    /// owner-side UI matches what the Go compiler/server consider the
+    /// authoritative assignment.
+    public func activeDelegate(forRoutineID routineID: String,
+                               at date: Date = Date()) -> Delegation.Delegate? {
+        let zone = routine(id: routineID)?.zone
+        for d in delegations where d.isActive(on: date) {
+            if d.covers(routineID: routineID, zone: zone) {
+                return d.delegate
+            }
+        }
+        return nil
     }
 }
 
@@ -94,6 +118,25 @@ public enum KitLoader {
             throw KitLoadError.indexInvalid(error.localizedDescription)
         }
 
-        return LoadedKit(directory: url, manifest: manifest, index: index)
+        // property.json is optional and best-effort. It carries
+        // delegations and other metadata the SDK doesn't strictly
+        // need to start a run; if it's missing or malformed we
+        // simply load with no delegations rather than failing the
+        // whole kit.
+        let delegations = loadDelegations(at: url.appendingPathComponent("property.json"))
+
+        return LoadedKit(directory: url,
+                         manifest: manifest,
+                         index: index,
+                         delegations: delegations)
+    }
+
+    private static func loadDelegations(at url: URL) -> [Delegation] {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let doc = try? JSONDecoder().decode(PropertyDocument.self, from: data) else {
+            return []
+        }
+        return doc.delegations ?? []
     }
 }
