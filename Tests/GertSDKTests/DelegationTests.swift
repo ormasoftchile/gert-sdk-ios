@@ -52,6 +52,33 @@ final class DelegationTests: XCTestCase {
         XCTAssertFalse(d.covers(routineID: "trash_day", zone: nil))
     }
 
+    // MARK: - overlaps
+
+    func testOverlaps_SameRoutineAndOverlappingDates() {
+        let a = makeDelegation(from: "2026-05-01", to: "2026-05-10", routines: ["water_plants"])
+        let b = makeDelegation(from: "2026-05-08", to: "2026-05-15", routines: ["water_plants"])
+        XCTAssertTrue(a.overlaps(b))
+        XCTAssertTrue(b.overlaps(a))
+    }
+
+    func testOverlaps_SameRoutineButNonOverlappingDates() {
+        let a = makeDelegation(from: "2026-05-01", to: "2026-05-10", routines: ["water_plants"])
+        let b = makeDelegation(from: "2026-05-11", to: "2026-05-20", routines: ["water_plants"])
+        XCTAssertFalse(a.overlaps(b))
+    }
+
+    func testOverlaps_OverlappingDatesButDisjointAssignments() {
+        let a = makeDelegation(from: "2026-05-01", to: "2026-05-10", routines: ["water_plants"])
+        let b = makeDelegation(from: "2026-05-05", to: "2026-05-15", routines: ["trash_day"])
+        XCTAssertFalse(a.overlaps(b))
+    }
+
+    func testOverlaps_ZoneMatch() {
+        let a = makeDelegation(from: "2026-05-01", to: "2026-05-10", zones: ["pool"])
+        let b = makeDelegation(from: "2026-05-05", to: "2026-05-15", zones: ["pool"])
+        XCTAssertTrue(a.overlaps(b))
+    }
+
     // MARK: - helpers
 
     private func makeDate(_ iso: String) -> Date {

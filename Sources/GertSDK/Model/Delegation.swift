@@ -173,6 +173,29 @@ public extension Delegation {
         return false
     }
 
+    /// Returns true when this delegation's active window intersects
+    /// `other`'s AND at least one assignment (routine or zone) is
+    /// shared between them. Used by the wizard's conflict guard so
+    /// the owner can see when they're double-booking the same work.
+    func overlaps(_ other: Delegation, calendar: Calendar = .current) -> Bool {
+        guard let aFrom = Self.parseDate(active.from, calendar: calendar),
+              let aTo   = Self.parseDate(active.to,   calendar: calendar),
+              let bFrom = Self.parseDate(other.active.from, calendar: calendar),
+              let bTo   = Self.parseDate(other.active.to,   calendar: calendar) else {
+            return false
+        }
+        // Date windows are inclusive on both ends.
+        guard aFrom <= bTo && bFrom <= aTo else { return false }
+
+        let myRoutines = Set(assigns.map(\.routine).filter { !$0.isEmpty })
+        let myZones    = Set(assigns.map(\.zone).filter    { !$0.isEmpty })
+        for a in other.assigns {
+            if !a.routine.isEmpty && myRoutines.contains(a.routine) { return true }
+            if !a.zone.isEmpty    && myZones.contains(a.zone)       { return true }
+        }
+        return false
+    }
+
     private static func parseDate(_ s: String, calendar: Calendar) -> Date? {
         let f = DateFormatter()
         f.calendar = calendar

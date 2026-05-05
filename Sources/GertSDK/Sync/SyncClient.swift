@@ -91,4 +91,92 @@ public struct SyncClient: Sendable {
         }
         return buf
     }
+
+    // MARK: - Delegations
+
+    /// Pushes the full delegation list for a property to the server.
+    /// Idempotent: server replaces the prior value. Used by the
+    /// owner-side app whenever UserDelegationsStore mutates.
+    @discardableResult
+    public func putDelegations(propertyID: String, delegations: [Delegation]) async throws -> Int {
+        struct Body: Encodable { let delegations: [Delegation] }
+        let body = try JSONEncoder().encode(Body(delegations: delegations))
+        var req = URLRequest(url: baseURL.appendingPathComponent(
+            "/api/v1/properties/\(propertyID)/delegations"
+        ))
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            throw SyncError.invalidStatus(code, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        struct R: Decodable { let stored: Int }
+        return ((try? JSONDecoder().decode(R.self, from: data))?.stored) ?? 0
+    }
+
+    /// Issues an invite token resolving to the supplied delegation.
+    /// The owner-side app shows `url` in a share sheet so the
+    /// delegate can open it on their device.
+    public struct InviteResult: Sendable, Equatable {
+        public let token: String
+        public let url: URL
+        public let expiresAt: String
+    }
+
+    public func createInvite(propertyID: String,
+                             delegation: Delegation,
+                             ttlHours: Int = 168) async throws -> InviteResult {
+        struct Body: Encodable {
+            let propertyID: String
+            let delegation: Delegation
+            let ttlHours: Int
+        }
+        let body = try JSONEncoder().encode(
+            Body(propertyID: propertyID, delegation: delegation, ttlHours: ttlHours)
+        )
+        var req = URLRequest(url: baseURL.appendingPathComponent("/api/v1/invites"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            throw SyncError.invalidStatus(code, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        struct R: Decodable { let token: String; let url: String; let expiresAt: String }
+        let parsed = try JSONDecoder().decode(R.self, from: data)
+        guard let url = URL(string: parsed.url) else {
+            throw SyncError.invalidStatus(http.statusCode, body: "invalid URL: \(parsed.url)")
+        }
+        return InviteResult(token: parsed.token, url: url, expiresAt: parsed.expiresAt)
+    }
+
+    /// Redeems an invite token. On success the server returns the
+    /// property id and the delegation the token was bound to. The
+    /// delegate-side app pins this and switches identity to it.
+    public struct RedeemResult: Sendable, Equatable {
+        public let propertyID: String
+        public let delegation: Delegation
+    }
+
+    public func redeemInvite(token: String) async throws -> RedeemResult {
+        var req = URLRequest(url: baseURL.appendingPathComponent(
+            "/api/v1/invites/\(token)/redeem"
+        ))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            throw SyncError.invalidStatus(code, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        struct R: Decodable { let propertyID: String; let delegation: Delegation }
+        let parsed = try JSONDecoder().decode(R.self, from: data)
+        return RedeemResult(propertyID: parsed.propertyID, delegation: parsed.delegation)
+    }
 }
