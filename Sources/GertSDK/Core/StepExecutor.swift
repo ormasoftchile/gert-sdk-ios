@@ -1,161 +1,127 @@
 import Foundation
 
-/// StepExecutor executes individual runbook steps.
-public struct StepExecutor {
-    private let tools: [String: ToolDefinition]
-    private let handlers: [String: GertToolHandler]
-    
-    init(tools: [ToolDefinition]) {
-        var toolMap: [String: ToolDefinition] = [:]
-        for tool in tools {
-            toolMap[tool.name] = tool
-        }
-        self.tools = toolMap
-        
-        // Build handler map from registry
-        var handlerMap: [String: GertToolHandler] = [:]
-        for handler in PlatformHandlerRegistry.shared.allHandlers {
-            handlerMap[handler.capability] = handler
-        }
-        self.handlers = handlerMap
+// CollectorResolver is what the host plugs in to fulfill collector
+// steps (the human-facing forms in a routine). Tests pass a closure
+// that returns canned values; an iOS app passes a closure that pushes
+// a SwiftUI form and waits for submission.
+public protocol CollectorResolver: Sendable {
+    func resolve(step: Step, runID: String) async throws -> [String: JSONValue]
+}
+
+// FailingCollectorResolver fails every collector. Useful as a default
+// when the host hasn't supplied one and no collector steps are
+// expected (pure tool runbooks).
+public struct FailingCollectorResolver: CollectorResolver {
+    public init() {}
+    public func resolve(step: Step, runID: String) async throws -> [String: JSONValue] {
+        throw StepExecutionError.noCollectorResolver(step.id)
     }
-    
-    /// Execute a single step, emitting tool/invoked, tool/completed, or tool/failed events.
-    /// - Parameters:
-    ///   - step: The step definition from the execution plan
-    ///   - broker: EventBroker to emit tool lifecycle events
-    ///   - runID: The run identifier
-    ///   - stepIndex: The index of the step in the runbook
-    /// - Returns: Step output as a dictionary
-    /// - Throws: Execution errors
-    public func execute(
-        step:      ExecutionStep,
-        broker:    EventBroker,
-        runID:     String,
-        stepIndex: Int
-    ) async throws -> [String: Any] {
-        guard let tool = tools[step.toolName] else {
-            throw ExecutionError.toolNotFound(step.toolName)
+}
+
+public enum StepExecutionError: Error, LocalizedError {
+    case unsupportedStepType(String, stepID: String)
+    case toolHandlerMissing(String)
+    case toolMissingRef(stepID: String)
+    case noCollectorResolver(String)
+    case toolFailed(String, underlying: Error)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedStepType(let t, let id):
+            return "Step '\(id)' has unsupported type '\(t)'"
+        case .toolHandlerMissing(let name):
+            return "No registered handler for tool '\(name)'"
+        case .toolMissingRef(let id):
+            return "Tool step '\(id)' is missing a 'tool:' reference"
+        case .noCollectorResolver(let id):
+            return "Collector step '\(id)' has no resolver registered"
+        case .toolFailed(let name, let err):
+            return "Tool '\(name)' failed: \(err.localizedDescription)"
         }
-        
-        guard let iosImpl = tool.iosImpl else {
-            throw ExecutionError.noIOSImpl(step.toolName)
+    }
+}
+
+// StepExecutor runs one step, emits the right lifecycle events, and
+// returns the step's captured outputs. It does not interpret the
+// runbook flow itself — that's RunSession's job.
+struct StepExecutor {
+    let handlers: HandlerRegistry
+    let collectorResolver: CollectorResolver
+
+    func execute(
+        step: Step,
+        index: Int,
+        runID: String,
+        broker: EventBroker
+    ) async throws -> [String: JSONValue] {
+        switch step.type {
+        case "tool":
+            return try await executeTool(step: step, index: index, runID: runID, broker: broker)
+        case "collector":
+            return try await executeCollector(step: step, runID: runID)
+        case "noop":
+            return [:]
+        default:
+            throw StepExecutionError.unsupportedStepType(step.type, stepID: step.id)
+        }
+    }
+
+    private func executeTool(
+        step: Step,
+        index: Int,
+        runID: String,
+        broker: EventBroker
+    ) async throws -> [String: JSONValue] {
+        guard let ref = step.tool else {
+            throw StepExecutionError.toolMissingRef(stepID: step.id)
+        }
+        guard let handler = handlers.handler(for: ref.name) else {
+            throw StepExecutionError.toolHandlerMissing(ref.name)
         }
 
+        let args = (ref.args ?? [:]).mapValues { $0.anyValue }
+
         await broker.emit(
-            kind:      RuntimeEvent.toolInvoked,
-            runID:     runID,
-            stepID:    step.id,
-            stepIndex: stepIndex,
-            toolName:  step.toolName,
-            action:    step.action,
-            payload:   step.inputs.asJSONPayload()
+            kind: RuntimeEvent.toolInvoked,
+            runID: runID,
+            stepID: step.id,
+            stepIndex: index,
+            toolName: ref.name,
+            action: ref.action,
+            payload: ref.args
         )
 
         do {
-            let result: [String: Any]
-            switch iosImpl.transport {
-            case .nativeSDK:
-                result = try await executeNativeHandler(impl: iosImpl, inputs: step.inputs)
-            case .http:
-                result = try await executeHTTPHandler(impl: iosImpl, inputs: step.inputs)
-            }
-
+            let raw = try await handler.execute(action: ref.action, args: args)
+            let outputs = raw.mapValues { JSONValue(any: $0) }
             await broker.emit(
-                kind:      RuntimeEvent.toolCompleted,
-                runID:     runID,
-                stepID:    step.id,
-                stepIndex: stepIndex,
-                toolName:  step.toolName,
-                action:    step.action,
-                payload:   result.asJSONPayload()
+                kind: RuntimeEvent.toolCompleted,
+                runID: runID,
+                stepID: step.id,
+                stepIndex: index,
+                toolName: ref.name,
+                action: ref.action,
+                payload: outputs
             )
-            return result
+            return outputs
         } catch {
             await broker.emit(
-                kind:      RuntimeEvent.toolFailed,
-                runID:     runID,
-                stepID:    step.id,
-                stepIndex: stepIndex,
-                toolName:  step.toolName,
-                action:    step.action,
-                payload:   [
-                    "error":     .string(error.localizedDescription),
-                    "errorType": .string(String(describing: type(of: error))),
-                ]
+                kind: RuntimeEvent.toolFailed,
+                runID: runID,
+                stepID: step.id,
+                stepIndex: index,
+                toolName: ref.name,
+                action: ref.action,
+                payload: ["error": .string(error.localizedDescription)]
             )
-            throw error
+            throw StepExecutionError.toolFailed(ref.name, underlying: error)
         }
     }
-    
-    private func executeNativeHandler(impl: PlatformImpl, inputs: [String: Any]) async throws -> [String: Any] {
-        guard let handler = handlers[impl.handler] else {
-            throw ExecutionError.handlerNotFound(impl.handler)
-        }
-        return try await handler.execute(inputs: inputs)
-    }
-    
-    private func executeHTTPHandler(impl: PlatformImpl, inputs: [String: Any]) async throws -> [String: Any] {
-        fatalError("Not yet implemented")
-    }
-}
 
-public enum ExecutionError: Error, LocalizedError {
-    case toolNotFound(String)
-    case noIOSImpl(String)
-    case handlerNotFound(String)
-    case stepFailed(String, underlying: Error)
-    
-    public var errorDescription: String? {
-        switch self {
-        case .toolNotFound(let name):
-            return "Tool '\(name)' not found in kit"
-        case .noIOSImpl(let name):
-            return "Tool '\(name)' has no iOS implementation"
-        case .handlerNotFound(let handler):
-            return "Handler '\(handler)' not registered"
-        case .stepFailed(let stepName, let error):
-            return "Step '\(stepName)' failed: \(error.localizedDescription)"
-        }
-    }
-}
-
-/// Represents a step in the execution plan.
-public struct ExecutionStep {
-    public let id:       String
-    public let toolName: String
-    public let action:   String
-    public let inputs:   [String: Any]
-
-    public init(id: String, toolName: String, action: String = "", inputs: [String: Any] = [:]) {
-        self.id       = id
-        self.toolName = toolName
-        self.action   = action
-        self.inputs   = inputs
-    }
-}
-
-// MARK: - Payload helper
-
-extension Dictionary where Key == String, Value == Any {
-    func asJSONPayload() -> [String: JSONValue] {
-        reduce(into: [:]) { result, pair in
-            result[pair.key] = jsonValue(from: pair.value)
-        }
-    }
-}
-
-private func jsonValue(from value: Any) -> JSONValue {
-    switch value {
-    case let s as String:       return .string(s)
-    case let i as Int:          return .int(i)
-    case let d as Double:       return .double(d)
-    case let b as Bool:         return .bool(b)
-    case let dict as [String: Any]:
-        return .object(dict.reduce(into: [:]) { $0[$1.key] = jsonValue(from: $1.value) })
-    case let arr as [Any]:
-        return .array(arr.map { jsonValue(from: $0) })
-    default:
-        return .string("\(value)")
+    private func executeCollector(
+        step: Step,
+        runID: String
+    ) async throws -> [String: JSONValue] {
+        return try await collectorResolver.resolve(step: step, runID: runID)
     }
 }

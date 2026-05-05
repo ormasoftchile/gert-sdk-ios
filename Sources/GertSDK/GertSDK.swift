@@ -1,57 +1,73 @@
 import Foundation
 
-/// GertSDK — embedded gert runbook execution for iOS.
-///
-/// Usage:
-/// ```swift
-/// let kit = try await GertSDK.loadKit(from: kitURL)
-/// let session = try await kit.startRun(runbook: "pool-weekly-check", actor: "alice")
-/// for await event in session.events {
-///     print(event)
-/// }
-/// ```
-public struct GertSDK {
-    
-    /// Loads a kit bundle from a local URL, resolving all dependencies eagerly.
-    /// Throws `KitLoadError.missingPlatformImpl` if any tool lacks an iOS impl.
-    /// Throws `KitLoadError.missingCapability` if a required capability is unavailable.
-    public static func loadKit(from url: URL) async throws -> LoadedKit {
-        try await KitLoader.load(from: url)
+// GertSDK is the top-level entry point for hosts. The typical flow is:
+//
+//   let kit = try KitLoader.load(from: kitURL)
+//   let runtime = GertRuntime(kit: kit)
+//   runtime.handlers.register(MyCameraHandler())
+//   runtime.handlers.register(MyLocationHandler())
+//   let session = try runtime.startRun(
+//     routineID: "casa-santiago.routine.pool_clean",
+//     actor: "alice",
+//     collector: MyFormResolver()
+//   )
+//   for await event in session.events { print(event) }
+//   let result = try await session.wait()
+//
+public enum GertSDK {
+    public static let version = "0.1.0"
+}
+
+// GertRuntime ties a loaded kit to a per-process handler registry.
+// Hosts construct one runtime per kit and reuse it across runs.
+public final class GertRuntime: @unchecked Sendable {
+    public let kit: LoadedKit
+    public let handlers: HandlerRegistry
+
+    public init(kit: LoadedKit, handlers: HandlerRegistry = HandlerRegistry()) {
+        self.kit = kit
+        self.handlers = handlers
     }
-    
-    /// Loads a kit by name, downloading from the platform kit registry if needed.
-    public static func loadKit(named name: String, version: String? = nil) async throws -> LoadedKit {
-        fatalError("Not yet implemented")
+
+    /// Starts a routine by its kit-scoped id.
+    @discardableResult
+    public func startRun(
+        routineID: String,
+        actor: String,
+        collector: CollectorResolver = FailingCollectorResolver()
+    ) throws -> RunSession {
+        guard let entry = kit.routine(id: routineID) else {
+            throw GertRuntimeError.routineNotFound(routineID)
+        }
+        let runbook = try kit.runbook(for: entry)
+        let executor = StepExecutor(handlers: handlers, collectorResolver: collector)
+        let session = RunSession(
+            runID: UUID().uuidString,
+            kitName: kit.manifest.name,
+            runbook: runbook,
+            actor: actor,
+            executor: executor
+        )
+        session.start()
+        return session
     }
-    
-    /// Sync: push a completed local run to a gert server.
-    public static func syncRun(_ run: CompletedRun, to serverURL: URL, authToken: String?) async throws {
-        fatalError("Not yet implemented")
+
+    /// Lists routines that can run on this device given the currently
+    /// registered tool handlers. Routines whose `tool_deps` reference
+    /// an unregistered handler are excluded.
+    public func runnableRoutines() -> [HomeKitIndex.Entry] {
+        kit.routines.filter { entry in
+            guard let deps = entry.toolDeps else { return true }
+            return deps.allSatisfy { handlers.handler(for: $0) != nil }
+        }
     }
 }
 
-public enum KitLoadError: Error, LocalizedError {
-    case missingPlatformImpl(toolName: String, platform: String)
-    case missingCapability(capability: String)
-    case manifestMissing
-    case manifestInvalid(String)
-    case dependencyNotFound(name: String, version: String)
-    case dependencyVersionConflict(name: String, required: String, found: String)
-    
+public enum GertRuntimeError: Error, LocalizedError {
+    case routineNotFound(String)
     public var errorDescription: String? {
         switch self {
-        case .missingPlatformImpl(let toolName, let platform):
-            return "Tool '\(toolName)' is missing implementation for platform '\(platform)'"
-        case .missingCapability(let capability):
-            return "Required capability '\(capability)' is unavailable on this device"
-        case .manifestMissing:
-            return "Kit manifest.json is missing"
-        case .manifestInvalid(let reason):
-            return "Kit manifest is invalid: \(reason)"
-        case .dependencyNotFound(let name, let version):
-            return "Dependency '\(name)' version '\(version)' not found"
-        case .dependencyVersionConflict(let name, let required, let found):
-            return "Dependency '\(name)' version conflict: required '\(required)', found '\(found)'"
+        case .routineNotFound(let id): return "Routine '\(id)' not found in kit"
         }
     }
 }

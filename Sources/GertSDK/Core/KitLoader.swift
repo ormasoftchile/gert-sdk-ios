@@ -1,134 +1,99 @@
 import Foundation
-import Yams
 
-/// KitLoader handles loading and validating kit bundles.
-public struct KitLoader {
-    
-    /// Loads a kit from a local directory URL.
-    /// - Parameters:
-    ///   - url: URL to the .kit directory
-    ///   - skipCapabilityCheck: If true, skip platform capability checks (for testing)
-    /// - Returns: A fully loaded kit with all dependencies resolved
-    /// - Throws: KitLoadError if manifest is missing, invalid, or dependencies cannot be resolved
-    public static func load(from url: URL, skipCapabilityCheck: Bool = false) async throws -> LoadedKit {
-        // 1. Read manifest.json
+public enum KitLoadError: Error, LocalizedError {
+    case directoryNotFound(URL)
+    case manifestMissing(URL)
+    case indexMissing(URL)
+    case manifestInvalid(String)
+    case indexInvalid(String)
+    case unsupportedKind(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .directoryNotFound(let url):  return "Kit directory not found: \(url.path)"
+        case .manifestMissing(let url):    return "manifest.json not found at \(url.path)"
+        case .indexMissing(let url):       return "index.json not found at \(url.path)"
+        case .manifestInvalid(let detail): return "Invalid manifest.json: \(detail)"
+        case .indexInvalid(let detail):    return "Invalid index.json: \(detail)"
+        case .unsupportedKind(let k):      return "Unsupported kit kind: \(k) (expected 'home')"
+        }
+    }
+}
+
+// LoadedKit is the SDK's view of a fully-loaded home kit. It exposes
+// the manifest, the index of routines/incidents, and lets the host
+// start a RunSession for any routine by id.
+public final class LoadedKit: @unchecked Sendable {
+    public let directory: URL
+    public let manifest: HomeKitManifest
+    public let index: HomeKitIndex
+
+    init(directory: URL, manifest: HomeKitManifest, index: HomeKitIndex) {
+        self.directory = directory
+        self.manifest = manifest
+        self.index = index
+    }
+
+    public var routines: [HomeKitIndex.Entry] { index.routines }
+    public var incidents: [HomeKitIndex.Entry] { index.incidents ?? [] }
+
+    /// Look up a routine by its kit-scoped id (e.g.
+    /// "casa-santiago.routine.pool_clean").
+    public func routine(id: String) -> HomeKitIndex.Entry? {
+        routines.first { $0.id == id }
+    }
+
+    /// Loads and parses the runbook YAML for the given index entry.
+    public func runbook(for entry: HomeKitIndex.Entry) throws -> Runbook {
+        let url = directory.appendingPathComponent(entry.path)
+        return try Runbook.load(from: url)
+    }
+}
+
+// KitLoader reads a kit directory laid out by `home-compile`:
+//
+//   <dir>/
+//     manifest.json
+//     index.json
+//     property.json   (currently informational only)
+//     routines/<id>.runbook.yaml
+//     incidents/<id>.runbook.yaml
+public enum KitLoader {
+    public static func load(from url: URL) throws -> LoadedKit {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+            throw KitLoadError.directoryNotFound(url)
+        }
+
         let manifestURL = url.appendingPathComponent("manifest.json")
-        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            throw KitLoadError.manifestMissing
+        guard fm.fileExists(atPath: manifestURL.path) else {
+            throw KitLoadError.manifestMissing(manifestURL)
         }
-        
-        // 2. Parse manifest
-        let manifestData = try Data(contentsOf: manifestURL)
-        let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
-        
-        // 3. Load runbooks from runbooks/
-        let runbooks = try loadRunbooks(from: url.appendingPathComponent("runbooks"))
-        
-        // 4. Load tools from tools/
-        let tools = try loadTools(from: url.appendingPathComponent("tools"))
-        
-        // 5. Validate all tools have iOS impl
-        try validatePlatformImpls(tools: tools)
-        
-        // 6. Check capabilities
-        if !skipCapabilityCheck {
-            try await checkCapabilities(tools: tools)
+        let indexURL = url.appendingPathComponent("index.json")
+        guard fm.fileExists(atPath: indexURL.path) else {
+            throw KitLoadError.indexMissing(indexURL)
         }
-        
-        // 7. Resolve dependencies eagerly
-        // TODO: Implement dependency resolution
-        
-        return LoadedKit(
-            manifest: manifest,
-            runbooks: runbooks,
-            tools: tools
-        )
-    }
-    
-    private static func loadRunbooks(from url: URL) throws -> [RunbookEntry] {
-        let fileManager = FileManager.default
-        
-        // Check if directory exists
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return []
+
+        let manifest: HomeKitManifest
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            manifest = try JSONDecoder().decode(HomeKitManifest.self, from: data)
+        } catch {
+            throw KitLoadError.manifestInvalid(error.localizedDescription)
         }
-        
-        // Enumerate *.runbook.yaml files
-        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil) else {
-            return []
+        guard manifest.kind == "home" else {
+            throw KitLoadError.unsupportedKind(manifest.kind)
         }
-        
-        var runbooks: [RunbookEntry] = []
-        
-        for case let fileURL as URL in enumerator {
-            guard fileURL.pathExtension == "yaml" && fileURL.lastPathComponent.hasSuffix(".runbook.yaml") else {
-                continue
-            }
-            
-            // Read and parse YAML
-            let yamlString = try String(contentsOf: fileURL, encoding: .utf8)
-            let decoder = YAMLDecoder()
-            let runbook = try decoder.decode(RunbookEntry.self, from: yamlString)
-            runbooks.append(runbook)
+
+        let index: HomeKitIndex
+        do {
+            let data = try Data(contentsOf: indexURL)
+            index = try JSONDecoder().decode(HomeKitIndex.self, from: data)
+        } catch {
+            throw KitLoadError.indexInvalid(error.localizedDescription)
         }
-        
-        return runbooks
-    }
-    
-    private static func loadTools(from url: URL) throws -> [ToolDefinition] {
-        let fileManager = FileManager.default
-        
-        // Check if directory exists
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw KitLoadError.manifestInvalid("tools/ directory missing")
-        }
-        
-        // Enumerate *.tool.yaml files
-        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil) else {
-            throw KitLoadError.manifestInvalid("Cannot enumerate tools/ directory")
-        }
-        
-        var tools: [ToolDefinition] = []
-        
-        for case let fileURL as URL in enumerator {
-            guard fileURL.pathExtension == "yaml" && fileURL.lastPathComponent.hasSuffix(".tool.yaml") else {
-                continue
-            }
-            
-            // Read and parse YAML
-            let yamlString = try String(contentsOf: fileURL, encoding: .utf8)
-            let decoder = YAMLDecoder()
-            let tool = try decoder.decode(ToolDefinition.self, from: yamlString)
-            tools.append(tool)
-        }
-        
-        return tools
-    }
-    
-    private static func validatePlatformImpls(tools: [ToolDefinition]) throws {
-        for tool in tools {
-            if !tool.hasIOSImpl {
-                throw KitLoadError.missingPlatformImpl(toolName: tool.name, platform: "ios")
-            }
-        }
-    }
-    
-    private static func checkCapabilities(tools: [ToolDefinition]) async throws {
-        let handlers = PlatformHandlerRegistry.shared.allHandlers
-        
-        for tool in tools {
-            for capability in tool.requiredCapabilities {
-                guard let handler = handlers.first(where: { $0.capability == capability }) else {
-                    throw KitLoadError.missingCapability(capability: capability)
-                }
-                
-                let available = await handler.checkAvailability()
-                if !available {
-                    throw KitLoadError.missingCapability(capability: capability)
-                }
-            }
-        }
+
+        return LoadedKit(directory: url, manifest: manifest, index: index)
     }
 }

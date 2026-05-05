@@ -1,233 +1,180 @@
 import Foundation
 
-/// Represents an active runbook execution session.
-public class RunSession {
-    public let runID:       String
-    public let kitName:     String
-    public let runbookName: String
-    public let actor:       String
-    public let startedAt:   Date
+public enum RunSessionError: Error, LocalizedError {
+    case alreadyStarted
+    case notStarted
 
-    private let runbook:  RunbookEntry
+    public var errorDescription: String? {
+        switch self {
+        case .alreadyStarted: return "Run session has already been started"
+        case .notStarted:     return "Run session has not been started"
+        }
+    }
+}
+
+// RunSession drives the execution of a single runbook against a kit.
+// It owns the EventBroker, sequences the flow, and exposes both an
+// AsyncStream of events and a `wait()` for the final summary.
+public final class RunSession: @unchecked Sendable {
+    public let runID: String
+    public let kitName: String
+    public let runbook: Runbook
+    public let actor: String
+    public let startedAt: Date
+
     private let executor: StepExecutor
-    private let broker:   EventBroker
+    private let broker = EventBroker()
+    private var task: Task<CompletedRun, Error>?
 
-    private var runTask: Task<CompletedRun, Error>?
-
-    // MARK: - Event Streams
-
-    /// All events for this run in sequence order.
-    public var events: AsyncStream<RuntimeEvent> {
-        broker.makeStream()
+    init(
+        runID: String,
+        kitName: String,
+        runbook: Runbook,
+        actor: String,
+        executor: StepExecutor
+    ) {
+        self.runID = runID
+        self.kitName = kitName
+        self.runbook = runbook
+        self.actor = actor
+        self.startedAt = Date()
+        self.executor = executor
     }
 
-    /// Events whose `kind` starts with `kindPrefix` (e.g. `"tool/"`, `"step/"`).
+    /// Live event stream. Subscribers attached after `start()` still
+    /// see buffered earlier events thanks to EventBroker's backlog.
+    public var events: AsyncStream<RuntimeEvent> { broker.makeStream() }
+
     public func events(kindPrefix: String) -> AsyncStream<RuntimeEvent> {
-        filtered { $0.kind.hasPrefix(kindPrefix) }
-    }
-
-    /// Events associated with a specific step.
-    public func events(stepID: String) -> AsyncStream<RuntimeEvent> {
-        filtered { $0.stepID == stepID }
-    }
-
-    /// Events emitted by a specific tool (all actions).
-    public func events(toolName: String) -> AsyncStream<RuntimeEvent> {
-        filtered { $0.toolName == toolName }
-    }
-
-    /// Events emitted by a specific tool action.
-    public func events(toolName: String, action: String) -> AsyncStream<RuntimeEvent> {
-        filtered { $0.toolName == toolName && $0.action == action }
-    }
-
-    // MARK: - Lifecycle
-
-    /// Begins executing the runbook asynchronously. Subscribe to `events` before calling this.
-    public func start() async throws {
-        guard runTask == nil else { return }
-        runTask = Task { [weak self] in
-            guard let self else { throw RunSessionError.sessionDeallocated }
-            return try await self.executeRun()
+        let upstream = broker.makeStream()
+        return AsyncStream { cont in
+            Task {
+                for await ev in upstream where ev.kind.hasPrefix(kindPrefix) {
+                    cont.yield(ev)
+                }
+                cont.finish()
+            }
         }
     }
 
-    /// Waits for the run to finish and returns the completed-run summary.
+    /// Begins execution. Subsequent calls are a no-op.
+    public func start() {
+        guard task == nil else { return }
+        task = Task { [weak self] in
+            guard let self else { throw RunSessionError.notStarted }
+            return try await self.run()
+        }
+    }
+
+    /// Waits for the run to finish and returns the summary.
     public func wait() async throws -> CompletedRun {
-        guard let task = runTask else { throw RunSessionError.notStarted }
+        guard let task else { throw RunSessionError.notStarted }
         return try await task.value
     }
 
-    /// Cancels the run. The run task detects cancellation cooperatively and
-    /// emits run/cancelled before exiting.
-    public func cancel() async {
-        runTask?.cancel()
+    /// Cooperative cancellation; the loop checks Task.isCancelled
+    /// between steps.
+    public func cancel() {
+        task?.cancel()
     }
 
-    // MARK: - Internal Init
-
-    init(
-        runID:       String,
-        kitName:     String,
-        runbookName: String,
-        actor:       String,
-        runbook:     RunbookEntry,
-        executor:    StepExecutor,
-        traceWriter: TraceWriter
-    ) {
-        self.runID       = runID
-        self.kitName     = kitName
-        self.runbookName = runbookName
-        self.actor       = actor
-        self.startedAt   = Date()
-        self.runbook     = runbook
-        self.executor    = executor
-        self.broker      = EventBroker(traceWriter: traceWriter)
-    }
-
-    // MARK: - Private Execution
-
-    private func executeRun() async throws -> CompletedRun {
-        defer { Task { await self.broker.close() } }
-
-        let steps = buildExecutionPlan()
-        var collectedEvents: [RuntimeEvent] = []
-
-        // Collect every event for the CompletedRun summary via a dedicated subscriber.
-        let collectorStream = broker.makeStream()
-        let collectTask = Task {
-            for await event in collectorStream {
-                collectedEvents.append(event)
+    private func run() async throws -> CompletedRun {
+        var collected: [RuntimeEvent] = []
+        let collector = Task { [broker] in
+            for await ev in broker.makeStream() {
+                collected.append(ev)
             }
         }
 
         await broker.emit(
-            kind:    RuntimeEvent.runStarted,
-            runID:   runID,
+            kind: RuntimeEvent.runStarted,
+            runID: runID,
             payload: [
-                "runbook": .string(runbookName),
+                "runbook": .string(runbook.id),
                 "actor":   .string(actor),
                 "kit":     .string(kitName),
             ]
         )
 
-        var firstStepError: Error?
+        var firstError: Error?
 
-        for (index, step) in steps.enumerated() {
+        for (index, item) in runbook.flow.enumerated() {
             if Task.isCancelled {
                 await broker.emit(kind: RuntimeEvent.runCancelled, runID: runID)
-                await collectTask.value
-                return makeCompletedRun(status: .cancelled, events: collectedEvents)
+                await broker.close()
+                _ = await collector.value
+                return CompletedRun(
+                    runID: runID, kitName: kitName, runbookID: runbook.id, actor: actor,
+                    startedAt: startedAt, completedAt: Date(),
+                    status: .cancelled, events: collected
+                )
             }
 
+            let step = item.step
             await broker.emit(
-                kind:      RuntimeEvent.stepStarted,
-                runID:     runID,
-                stepID:    step.id,
+                kind: RuntimeEvent.stepStarted,
+                runID: runID,
+                stepID: step.id,
                 stepIndex: index,
-                toolName:  step.toolName
+                toolName: step.tool?.name
             )
 
             do {
                 let outputs = try await executor.execute(
-                    step:      step,
-                    broker:    broker,
-                    runID:     runID,
-                    stepIndex: index
+                    step: step, index: index, runID: runID, broker: broker
                 )
                 await broker.emit(
-                    kind:      RuntimeEvent.stepCompleted,
-                    runID:     runID,
-                    stepID:    step.id,
+                    kind: RuntimeEvent.stepCompleted,
+                    runID: runID,
+                    stepID: step.id,
                     stepIndex: index,
-                    toolName:  step.toolName,
-                    payload:   outputs.asJSONPayload()
+                    toolName: step.tool?.name,
+                    payload: outputs
                 )
             } catch is CancellationError {
                 await broker.emit(kind: RuntimeEvent.runCancelled, runID: runID)
-                await collectTask.value
-                return makeCompletedRun(status: .cancelled, events: collectedEvents)
+                await broker.close()
+                _ = await collector.value
+                return CompletedRun(
+                    runID: runID, kitName: kitName, runbookID: runbook.id, actor: actor,
+                    startedAt: startedAt, completedAt: Date(),
+                    status: .cancelled, events: collected
+                )
             } catch {
-                firstStepError = firstStepError ?? error
+                firstError = firstError ?? error
                 await broker.emit(
-                    kind:      RuntimeEvent.stepFailed,
-                    runID:     runID,
-                    stepID:    step.id,
+                    kind: RuntimeEvent.stepFailed,
+                    runID: runID,
+                    stepID: step.id,
                     stepIndex: index,
-                    toolName:  step.toolName,
-                    payload:   ["error": .string(error.localizedDescription)]
+                    toolName: step.tool?.name,
+                    payload: ["error": .string(error.localizedDescription)]
                 )
             }
         }
 
-        if let error = firstStepError {
+        let status: RunStatus
+        if let firstError {
             await broker.emit(
-                kind:    RuntimeEvent.runFailed,
-                runID:   runID,
-                payload: ["error": .string(error.localizedDescription)]
+                kind: RuntimeEvent.runFailed,
+                runID: runID,
+                payload: ["error": .string(firstError.localizedDescription)]
             )
-            await collectTask.value
-            let completed = makeCompletedRun(status: .failed, events: collectedEvents)
-            throw RunSessionError.runFailed(completed, underlying: error)
+            status = .failed
+        } else {
+            await broker.emit(kind: RuntimeEvent.runCompleted, runID: runID)
+            status = .succeeded
         }
 
-        await broker.emit(kind: RuntimeEvent.runCompleted, runID: runID)
-        await collectTask.value
-        return makeCompletedRun(status: .succeeded, events: collectedEvents)
-    }
+        await broker.close()
+        _ = await collector.value
 
-    private func buildExecutionPlan() -> [ExecutionStep] {
-        runbook.steps.map { step in
-            let inputs: [String: Any] = step.args?.reduce(into: [:]) { dict, pair in
-                dict[pair.key] = pair.value.value
-            } ?? [:]
-            return ExecutionStep(id: step.id, toolName: step.tool, action: step.action, inputs: inputs)
-        }
-    }
-
-    private func makeCompletedRun(status: RunStatus, events: [RuntimeEvent]) -> CompletedRun {
-        CompletedRun(
-            runID:       runID,
-            kitName:     kitName,
-            runbookName: runbookName,
-            actor:       actor,
-            startedAt:   startedAt,
-            completedAt: Date(),
-            status:      status,
-            events:      events
+        let summary = CompletedRun(
+            runID: runID, kitName: kitName, runbookID: runbook.id, actor: actor,
+            startedAt: startedAt, completedAt: Date(),
+            status: status, events: collected
         )
-    }
-
-    private func filtered(
-        _ predicate: @escaping @Sendable (RuntimeEvent) -> Bool
-    ) -> AsyncStream<RuntimeEvent> {
-        let upstream = broker.makeStream()
-        return AsyncStream { continuation in
-            Task {
-                for await event in upstream where predicate(event) {
-                    continuation.yield(event)
-                }
-                continuation.finish()
-            }
-        }
-    }
-}
-
-// MARK: - Errors
-
-public enum RunSessionError: Error, LocalizedError {
-    case notStarted
-    case sessionDeallocated
-    case runFailed(CompletedRun, underlying: Error)
-
-    public var errorDescription: String? {
-        switch self {
-        case .notStarted:
-            return "Run has not been started — call start() first"
-        case .sessionDeallocated:
-            return "RunSession was deallocated before the run completed"
-        case .runFailed(_, let error):
-            return "Run failed: \(error.localizedDescription)"
-        }
+        if let firstError { throw firstError }
+        return summary
     }
 }

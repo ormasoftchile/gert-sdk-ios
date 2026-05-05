@@ -1,136 +1,82 @@
 import Foundation
 
-// MARK: - JSONValue
-
-/// Type-safe Codable representation of arbitrary JSON values, used for RuntimeEvent payload fields.
-public enum JSONValue: Codable, Sendable, Equatable {
-    case string(String)
-    case int(Int)
-    case double(Double)
-    case bool(Bool)
-    case null
-    case array([JSONValue])
-    case object([String: JSONValue])
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-        } else if let v = try? container.decode(Bool.self) {
-            self = .bool(v)
-        } else if let v = try? container.decode(Int.self) {
-            self = .int(v)
-        } else if let v = try? container.decode(Double.self) {
-            self = .double(v)
-        } else if let v = try? container.decode(String.self) {
-            self = .string(v)
-        } else if let v = try? container.decode([JSONValue].self) {
-            self = .array(v)
-        } else if let v = try? container.decode([String: JSONValue].self) {
-            self = .object(v)
-        } else {
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Cannot decode JSONValue"
-            )
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let v): try container.encode(v)
-        case .int(let v):    try container.encode(v)
-        case .double(let v): try container.encode(v)
-        case .bool(let v):   try container.encode(v)
-        case .null:          try container.encodeNil()
-        case .array(let v):  try container.encode(v)
-        case .object(let v): try container.encode(v)
-        }
-    }
-}
-
-// MARK: - RuntimeEvent
-
-/// Canonical event envelope for all runtime events during a runbook execution.
-/// See run-events-v1.md for the full specification.
-public struct RuntimeEvent: Codable, Sendable {
-    /// Event kind (e.g. "run/started", "tool/completed").
-    public let kind:        String
-    /// Unique identifier for the run this event belongs to.
-    public let runID:       String
-    /// Monotonic sequence number per run, starting at 0.
-    public let sequence:    Int64
-    /// Unix timestamp in milliseconds.
-    public let timestampMs: Int64
-    /// Step identifier (present for step and tool events).
-    public let stepID:      String?
-    /// Step index in the runbook (present for step and tool events).
-    public let stepIndex:   Int?
-    /// Tool name (present for tool events).
-    public let toolName:    String?
-    /// Tool action (present for tool events).
-    public let action:      String?
-    /// Arbitrary event payload.
-    public let payload:     [String: JSONValue]
-
-    enum CodingKeys: String, CodingKey {
-        case kind
-        case runID       = "run_id"
-        case sequence
-        case timestampMs = "timestamp_ms"
-        case stepID      = "step_id"
-        case stepIndex   = "step_index"
-        case toolName    = "tool_name"
-        case action
-        case payload
-    }
+// RuntimeEvent describes a single event emitted while a run executes.
+// Events are immutable and ordered by `sequence`. The vocabulary of
+// `kind` strings matches what gert's HTTP/SSE server emits so a host
+// can reuse logging, telemetry and replay code paths between local
+// in-app runs and server-side runs.
+public struct RuntimeEvent: Sendable, Codable, Equatable {
+    public let sequence: Int
+    public let timestamp: Date
+    public let kind: String
+    public let runID: String
+    public let stepID: String?
+    public let stepIndex: Int?
+    public let toolName: String?
+    public let action: String?
+    public let payload: [String: JSONValue]?
 
     public init(
-        kind:        String,
-        runID:       String,
-        sequence:    Int64,
-        timestampMs: Int64,
-        stepID:      String?             = nil,
-        stepIndex:   Int?                = nil,
-        toolName:    String?             = nil,
-        action:      String?             = nil,
-        payload:     [String: JSONValue] = [:]
+        sequence: Int,
+        timestamp: Date = Date(),
+        kind: String,
+        runID: String,
+        stepID: String? = nil,
+        stepIndex: Int? = nil,
+        toolName: String? = nil,
+        action: String? = nil,
+        payload: [String: JSONValue]? = nil
     ) {
-        self.kind        = kind
-        self.runID       = runID
-        self.sequence    = sequence
-        self.timestampMs = timestampMs
-        self.stepID      = stepID
-        self.stepIndex   = stepIndex
-        self.toolName    = toolName
-        self.action      = action
-        self.payload     = payload
+        self.sequence = sequence
+        self.timestamp = timestamp
+        self.kind = kind
+        self.runID = runID
+        self.stepID = stepID
+        self.stepIndex = stepIndex
+        self.toolName = toolName
+        self.action = action
+        self.payload = payload
     }
 }
 
-// MARK: - Event Kind Constants
+public extension RuntimeEvent {
+    // Run lifecycle
+    static let runStarted   = "run/started"
+    static let runCompleted = "run/completed"
+    static let runFailed    = "run/failed"
+    static let runCancelled = "run/cancelled"
 
-extension RuntimeEvent {
-    public static let runStarted    = "run/started"
-    public static let runCompleted  = "run/completed"
-    public static let runFailed     = "run/failed"
-    public static let runCancelled  = "run/cancelled"
+    // Step lifecycle
+    static let stepStarted     = "step/started"
+    static let stepCompleted   = "step/completed"
+    static let stepFailed      = "step/failed"
+    /// Emitted when a collector step is waiting for the host to
+    /// supply user input via `RunSession.submitCollectorInput`.
+    static let stepAwaitingInput = "step/awaiting_input"
 
-    public static let stepStarted   = "step/started"
-    public static let stepCompleted = "step/completed"
-    public static let stepFailed    = "step/failed"
-    public static let stepSkipped   = "step/skipped"
+    // Tool lifecycle (a tool step emits its own start/complete in
+    // addition to the surrounding step lifecycle events).
+    static let toolInvoked   = "tool/invoked"
+    static let toolCompleted = "tool/completed"
+    static let toolFailed    = "tool/failed"
+}
 
-    public static let toolInvoked   = "tool/invoked"
-    public static let toolCompleted = "tool/completed"
-    public static let toolFailed    = "tool/failed"
-    public static let toolProgress  = "tool/progress"
+public enum RunStatus: String, Sendable, Codable {
+    case succeeded
+    case failed
+    case cancelled
+}
 
-    /// Kinds that terminate the event stream — no events are delivered after these.
-    static let terminalKinds: Set<String> = [
-        runCompleted,
-        runFailed,
-        runCancelled,
-    ]
+// CompletedRun is the immutable summary returned when a RunSession
+// finishes. It carries the full event log so a caller can sync it to
+// the gert server, archive it, or display it offline.
+public struct CompletedRun: Sendable, Codable {
+    public let runID: String
+    public let kitName: String
+    public let runbookID: String
+    public let actor: String
+    public let startedAt: Date
+    public let completedAt: Date
+    public let status: RunStatus
+    public let events: [RuntimeEvent]
 }
