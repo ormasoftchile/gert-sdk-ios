@@ -35,7 +35,7 @@ public struct HomeKitIndex: Codable, Sendable {
     public let routines: [Entry]
     public let incidents: [Entry]?
 
-    public struct Entry: Codable, Sendable, Identifiable {
+    public struct Entry: Codable, Sendable, Identifiable, Equatable {
         public let id: String
         public let name: String
         public let path: String
