@@ -14,6 +14,10 @@ public struct CadenceAnchor: Sendable, Equatable {
         /// One-time anchor date in the property's local time zone.
         /// The cadence repeats every interval starting from this date.
         case fixedDate(year: Int, month: Int, day: Int)
+        /// No calendar pin — anchor only the time of day. Used with
+        /// daily cadences (every: 1d, 2d, …) so the routine fires at
+        /// the same wall-clock time each cycle.
+        case timeOfDay
     }
 
     public let rule: Rule
@@ -56,6 +60,12 @@ public struct CadenceAnchor: Sendable, Equatable {
                 rule: .fixedDate(year: parts.year, month: parts.month, day: parts.day),
                 timeOfDay: time
             )
+        }
+        // Time-only anchor — valid for daily cadences. Only honor
+        // when `anchor_time` was actually supplied; otherwise return
+        // nil so the scheduler falls back to relative computation.
+        if let time {
+            return CadenceAnchor(rule: .timeOfDay, timeOfDay: time)
         }
         return nil
     }
@@ -111,7 +121,37 @@ extension CadenceAnchor {
                                  cadenceInterval: cadenceInterval,
                                  inclusive: inclusive,
                                  calendar: calendar)
+        case .timeOfDay:
+            return nextTimeOfDay(reference: reference,
+                                 cadenceInterval: cadenceInterval,
+                                 inclusive: inclusive,
+                                 calendar: calendar)
         }
+    }
+
+    private func nextTimeOfDay(
+        reference: Date,
+        cadenceInterval: TimeInterval,
+        inclusive: Bool,
+        calendar: Calendar
+    ) -> Date {
+        var candidate = applyTime(to: reference, in: calendar)
+        // Walk back at most one cadence step so the very first
+        // occurrence on or after `reference` can be earlier today
+        // when the anchored time hasn't passed yet.
+        if candidate > reference {
+            let stepBack = cadenceInterval > 0 ? cadenceInterval : 86_400
+            candidate = candidate.addingTimeInterval(-stepBack)
+        }
+        let step = cadenceInterval > 0 ? cadenceInterval : 86_400
+        var iterations = 0
+        while iterations < 10_000 {
+            let dueOK = inclusive ? candidate >= reference : candidate > reference
+            if dueOK { return candidate }
+            candidate = candidate.addingTimeInterval(step)
+            iterations += 1
+        }
+        return candidate
     }
 
     private func applyTime(to date: Date, in calendar: Calendar) -> Date {

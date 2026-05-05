@@ -129,4 +129,51 @@ final class CadenceAnchorTests: XCTestCase {
         let expected = date(2026, 10, 15)
         XCTAssertLessThan(abs(next.timeIntervalSince(expected)), 86_400 * 2)
     }
+
+    // MARK: - Time-only (daily) anchor
+
+    func testFromMetadataTimeOnly() {
+        let a = CadenceAnchor.from(metadata: ["anchor_time": "07:30"])
+        XCTAssertEqual(a?.rule, .timeOfDay)
+        XCTAssertEqual(a?.timeOfDay?.hour, 7)
+        XCTAssertEqual(a?.timeOfDay?.minute, 30)
+    }
+
+    func testTimeOnlyTodayBeforeFireTime() {
+        // Reference is 2026-05-05 06:00. Anchor 07:30 fires today at
+        // 07:30, well before any cadence step.
+        let a = CadenceAnchor(rule: .timeOfDay, timeOfDay: (7, 30))
+        let next = a.nextOccurrence(
+            onOrAfter: date(2026, 5, 5, 6, 0),
+            cadenceInterval: 86_400,
+            inclusive: true,
+            calendar: calendar
+        )
+        XCTAssertEqual(next, date(2026, 5, 5, 7, 30))
+    }
+
+    func testTimeOnlyTodayAfterFireTime() {
+        // Reference is 2026-05-05 08:00. Anchor 07:30 already passed
+        // today → tomorrow at 07:30.
+        let a = CadenceAnchor(rule: .timeOfDay, timeOfDay: (7, 30))
+        let next = a.nextOccurrence(
+            onOrAfter: date(2026, 5, 5, 8, 0),
+            cadenceInterval: 86_400,
+            inclusive: true,
+            calendar: calendar
+        )
+        XCTAssertEqual(next, date(2026, 5, 6, 7, 30))
+    }
+
+    func testTimeOnlyEveningWalk() {
+        // Reference 2026-05-05 18:00, anchor 19:30 → today 19:30.
+        let a = CadenceAnchor(rule: .timeOfDay, timeOfDay: (19, 30))
+        let next = a.nextOccurrence(
+            onOrAfter: date(2026, 5, 5, 18, 0),
+            cadenceInterval: 86_400,
+            inclusive: true,
+            calendar: calendar
+        )
+        XCTAssertEqual(next, date(2026, 5, 5, 19, 30))
+    }
 }
