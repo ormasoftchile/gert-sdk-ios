@@ -79,4 +79,24 @@ public struct CompletedRun: Sendable, Codable {
     public let completedAt: Date
     public let status: RunStatus
     public let events: [RuntimeEvent]
+
+    public init(
+        runID: String,
+        kitName: String,
+        runbookID: String,
+        actor: String,
+        startedAt: Date,
+        completedAt: Date,
+        status: RunStatus,
+        events: [RuntimeEvent]
+    ) {
+        self.runID = runID
+        self.kitName = kitName
+        self.runbookID = runbookID
+        self.actor = actor
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.status = status
+        self.events = events
+    }
 }
