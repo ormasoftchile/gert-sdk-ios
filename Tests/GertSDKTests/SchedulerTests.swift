@@ -42,8 +42,19 @@ final class SchedulerTests: XCTestCase {
         let schedule = await Scheduler().schedule(kit: kit, completions: store)
         XCTAssertEqual(schedule.count, kit.routines.count)
         for item in schedule {
-            XCTAssertEqual(item.status, .neverCompleted)
-            XCTAssertNil(item.lastCompleted)
+            // Anchored routines (e.g. trash_day) compute a real
+            // nextDue from the anchor rule on first run, so they
+            // appear as overdue/dueNow/upcoming rather than
+            // .neverCompleted. Unanchored routines remain
+            // .neverCompleted until the user completes one.
+            let anchor = CadenceAnchor.from(metadata: item.entry.metadata)
+            if anchor != nil {
+                XCTAssertNotNil(item.nextDue, "anchored routine \(item.entry.id) should have a nextDue")
+                XCTAssertNotEqual(item.status, .neverCompleted)
+            } else {
+                XCTAssertEqual(item.status, .neverCompleted)
+                XCTAssertNil(item.lastCompleted)
+            }
         }
     }
 
@@ -98,8 +109,16 @@ final class SchedulerTests: XCTestCase {
             "casa-santiago.routine.water_plants": now.addingTimeInterval(-3600),
         ])
         let actionable = await Scheduler().actionable(kit: kit, completions: store, now: now)
+        // water_plants completed 1h ago → upcoming, filtered out.
         XCTAssertFalse(actionable.contains { $0.entry.id == "casa-santiago.routine.water_plants" })
-        // The other 4 routines were never completed → all in actionable list.
-        XCTAssertEqual(actionable.count, kit.routines.count - 1)
+        // Other anchored or unanchored routines may also be upcoming
+        // depending on `now` vs their anchor; only assert the
+        // filtering behavior is correct rather than an exact count.
+        for item in actionable {
+            switch item.status {
+            case .upcoming: XCTFail("upcoming should be filtered out: \(item.entry.id)")
+            default: break
+            }
+        }
     }
 }

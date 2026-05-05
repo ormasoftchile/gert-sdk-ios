@@ -56,9 +56,10 @@ public struct Scheduler: Sendable {
 
         for entry in kit.routines {
             let cadence = entry.cadence.flatMap { try? Cadence.parse($0) }
+            let anchor = CadenceAnchor.from(metadata: entry.metadata)
             let last = await completions.lastCompletion(routineID: entry.id)
             out.append(makeScheduled(
-                entry: entry, cadence: cadence, last: last, now: now
+                entry: entry, cadence: cadence, anchor: anchor, last: last, now: now
             ))
         }
         out.sort { $0.urgency < $1.urgency }
@@ -68,6 +69,7 @@ public struct Scheduler: Sendable {
     private func makeScheduled(
         entry: HomeKitIndex.Entry,
         cadence: Cadence?,
+        anchor: CadenceAnchor?,
         last: Date?,
         now: Date
     ) -> ScheduledRoutine {
@@ -79,6 +81,37 @@ public struct Scheduler: Sendable {
                 status: last == nil ? .neverCompleted : .dueNow
             )
         }
+
+        // When the kit author declared an absolute anchor, scheduling
+        // is driven by the anchor rule rather than a relative offset
+        // from `last`. Anchor wins on conflict (a late completion
+        // does not shift the cadence to a new weekday).
+        if let anchor {
+            let reference = last ?? now
+            // For first-time scheduling we want the next occurrence on
+            // or after `now`. Once a completion exists we want strictly
+            // after the completion so the same anchor isn't reused.
+            let inclusive = (last == nil)
+            let next = anchor.nextOccurrence(
+                onOrAfter: reference,
+                cadenceInterval: cadence.approximateInterval,
+                inclusive: inclusive
+            )
+            let delta = next.timeIntervalSince(now)
+            let status: ScheduledRoutine.Status
+            if delta < -dueWindow {
+                status = .overdue(by: -delta)
+            } else if delta <= dueWindow {
+                status = .dueNow
+            } else {
+                status = .upcoming(in: delta)
+            }
+            return ScheduledRoutine(
+                entry: entry, cadence: cadence,
+                lastCompleted: last, nextDue: next, status: status
+            )
+        }
+
         guard let last else {
             return ScheduledRoutine(
                 entry: entry, cadence: cadence,
