@@ -30,6 +30,14 @@ public final class CameraHandler: NSObject, GertToolHandler, UIImagePickerContro
         let quality = (args["quality"] as? String) ?? "high"
         let jpegQuality: CGFloat = quality == "low" ? 0.4 : (quality == "medium" ? 0.7 : 0.9)
 
+        // Fail fast on devices without a camera (e.g. the simulator).
+        // UIImagePickerController.SourceType.camera will throw an
+        // NSInvalidArgumentException ("Source type 1 not available")
+        // if presented anyway.
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            throw CameraError.unavailable
+        }
+
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         switch status {
         case .notDetermined:
@@ -120,12 +128,14 @@ public final class CameraHandler: NSObject, GertToolHandler, UIImagePickerContro
 
 public enum CameraError: Error, LocalizedError {
     case permissionDenied
+    case unavailable
     case noPresenter
     case cancelled
     case encodingFailed
     public var errorDescription: String? {
         switch self {
         case .permissionDenied: return "Camera permission denied"
+        case .unavailable:      return "Camera not available on this device"
         case .noPresenter:      return "No view controller available to present the camera"
         case .cancelled:        return "Camera capture cancelled"
         case .encodingFailed:   return "Failed to encode captured image"
