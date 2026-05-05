@@ -16,6 +16,18 @@ public struct Delegation: Codable, Sendable, Equatable {
     public let permissions: Permissions
     public let notifications: DelegationNotifications?
 
+    public init(delegate: Delegate,
+                active: ActiveWindow,
+                assigns: [Assignment],
+                permissions: Permissions,
+                notifications: DelegationNotifications? = nil) {
+        self.delegate = delegate
+        self.active = active
+        self.assigns = assigns
+        self.permissions = permissions
+        self.notifications = notifications
+    }
+
     enum CodingKeys: String, CodingKey {
         case delegate     = "Delegate"
         case active       = "Active"
@@ -28,6 +40,12 @@ public struct Delegation: Codable, Sendable, Equatable {
         public let name: String
         public let contact: String?
         public let email: String?
+
+        public init(name: String, contact: String? = nil, email: String? = nil) {
+            self.name = name
+            self.contact = contact
+            self.email = email
+        }
 
         enum CodingKeys: String, CodingKey {
             case name    = "Name"
@@ -42,6 +60,11 @@ public struct Delegation: Codable, Sendable, Equatable {
         /// ISO-8601 date (YYYY-MM-DD), inclusive.
         public let to: String
 
+        public init(from: String, to: String) {
+            self.from = from
+            self.to = to
+        }
+
         enum CodingKeys: String, CodingKey {
             case from = "From"
             case to   = "To"
@@ -54,6 +77,11 @@ public struct Delegation: Codable, Sendable, Equatable {
         /// Zone id, e.g. "pool".
         public let zone: String
 
+        public init(routine: String, zone: String) {
+            self.routine = routine
+            self.zone = zone
+        }
+
         enum CodingKeys: String, CodingKey {
             case routine = "Routine"
             case zone    = "Zone"
@@ -64,6 +92,14 @@ public struct Delegation: Codable, Sendable, Equatable {
         public let canReportIncidents: Bool
         public let canModifyRoutines: Bool
         public let canViewHistory: Bool
+
+        public init(canReportIncidents: Bool,
+                    canModifyRoutines: Bool,
+                    canViewHistory: Bool) {
+            self.canReportIncidents = canReportIncidents
+            self.canModifyRoutines = canModifyRoutines
+            self.canViewHistory = canViewHistory
+        }
 
         enum CodingKeys: String, CodingKey {
             case canReportIncidents = "CanReportIncidents"
@@ -76,6 +112,14 @@ public struct Delegation: Codable, Sendable, Equatable {
         public let remindDelegateHoursBefore: Int?
         public let notifyOwnerOnCompletion: Bool?
         public let notifyOwnerIfOverdue: Bool?
+
+        public init(remindDelegateHoursBefore: Int? = nil,
+                    notifyOwnerOnCompletion: Bool? = nil,
+                    notifyOwnerIfOverdue: Bool? = nil) {
+            self.remindDelegateHoursBefore = remindDelegateHoursBefore
+            self.notifyOwnerOnCompletion = notifyOwnerOnCompletion
+            self.notifyOwnerIfOverdue = notifyOwnerIfOverdue
+        }
 
         enum CodingKeys: String, CodingKey {
             case remindDelegateHoursBefore = "RemindDelegateHoursBefore"
