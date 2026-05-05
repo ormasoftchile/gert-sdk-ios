@@ -20,17 +20,40 @@ public final class CameraHandler: NSObject, GertToolHandler, UIImagePickerContro
 
     private var continuation: CheckedContinuation<UIImage, Error>?
 
-    public override init() { super.init() }
+    /// When true, `execute` short-circuits and returns a synthetic
+    /// asset payload instead of trying to present the camera. Useful
+    /// for the iOS simulator, UI test rigs (Maestro), and demos.
+    /// Defaults to true on the simulator and false on real devices,
+    /// but the host app can flip it explicitly.
+    public var stubOnSimulator: Bool
+
+    public override init() {
+        #if targetEnvironment(simulator)
+        self.stubOnSimulator = true
+        #else
+        self.stubOnSimulator = false
+        #endif
+        super.init()
+    }
 
     public func isAvailable() async -> Bool {
-        UIImagePickerController.isSourceTypeAvailable(.camera)
+        if stubOnSimulator { return true }
+        return UIImagePickerController.isSourceTypeAvailable(.camera)
     }
 
     public func execute(action: String, args: [String: Any]) async throws -> [String: Any] {
         let quality = (args["quality"] as? String) ?? "high"
         let jpegQuality: CGFloat = quality == "low" ? 0.4 : (quality == "medium" ? 0.7 : 0.9)
 
-        // Fail fast on devices without a camera (e.g. the simulator).
+        // Simulator / test path: write a 1x1 placeholder JPEG and
+        // return the same shape a real capture would produce, so a
+        // routine that depends on camera.capture can still run end
+        // to end.
+        if stubOnSimulator {
+            return try makeStubAsset(quality: quality)
+        }
+
+        // Fail fast on devices without a camera.
         // UIImagePickerController.SourceType.camera will throw an
         // NSInvalidArgumentException ("Source type 1 not available")
         // if presented anyway.
@@ -89,6 +112,29 @@ public final class CameraHandler: NSObject, GertToolHandler, UIImagePickerContro
         let url = dir.appendingPathComponent("\(assetID).jpg")
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    private func makeStubAsset(quality: String) throws -> [String: Any] {
+        // 1x1 white JPEG, just enough to be a valid asset on disk.
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1))
+        let image = renderer.image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        guard let data = image.jpegData(compressionQuality: 0.9) else {
+            throw CameraError.encodingFailed
+        }
+        let assetID = UUID().uuidString
+        let url = try writeAsset(data: data, assetID: assetID)
+        return [
+            "asset_id":    assetID,
+            "uri":         url.absoluteString,
+            "mime_type":   "image/jpeg",
+            "byte_size":   data.count,
+            "captured_at": ISO8601DateFormatter().string(from: Date()),
+            "stub":        true,
+            "quality":     quality,
+        ]
     }
 
     // MARK: - UIImagePickerControllerDelegate
