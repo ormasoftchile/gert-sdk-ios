@@ -1,7 +1,7 @@
 import Foundation
 import Yams
 
-// Runbook is the in-memory representation of a runbook/v2 YAML file
+// Runbook is the in-memory representation of a runbook/v1 YAML file
 // produced by the gert engine or the gert-domain-home compiler. The
 // structure mirrors the YAML 1:1 — top-level metadata, plus a `flow`
 // of nested step nodes.
@@ -19,7 +19,7 @@ public struct Runbook: Codable, Sendable {
     public let flow: [FlowItem]
 }
 
-// FlowItem wraps a single `- step:` entry in `flow:`. The runbook/v2
+// FlowItem wraps a single `- step:` entry in `flow:`. The runbook/v1
 // format always nests the step under a `step:` key so future flow
 // kinds (group, parallel, …) can sit alongside without ambiguity.
 public struct FlowItem: Codable, Sendable {
@@ -83,13 +83,13 @@ public enum RunbookLoadError: Error, LocalizedError {
         switch self {
         case .fileNotFound(let url):       return "Runbook file not found: \(url.path)"
         case .invalidYAML(let detail):     return "Invalid runbook YAML: \(detail)"
-        case .unsupportedAPIVersion(let v): return "Unsupported runbook apiVersion: \(v) (expected 'runbook/v2')"
+        case .unsupportedAPIVersion(let v): return "Unsupported runbook apiVersion: \(v) (expected 'runbook/v1')"
         }
     }
 }
 
 public extension Runbook {
-    /// Loads and decodes a runbook/v2 YAML file from disk.
+    /// Loads and decodes a runbook/v1 YAML file from disk.
     static func load(from url: URL) throws -> Runbook {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw RunbookLoadError.fileNotFound(url)
@@ -101,7 +101,7 @@ public extension Runbook {
         } catch {
             throw RunbookLoadError.invalidYAML(error.localizedDescription)
         }
-        guard rb.apiVersion == "runbook/v2" else {
+        guard rb.apiVersion == "runbook/v1" else {
             throw RunbookLoadError.unsupportedAPIVersion(rb.apiVersion)
         }
         return rb
