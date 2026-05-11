@@ -1,0 +1,51 @@
+id: asset_maintenance
+version: 1
+kind: routine
+title: "Asset maintenance"
+description: "Periodic service on a specific physical asset."
+
+slots:
+  - id: asset
+    type: asset_ref
+    required: true
+    label: "Which asset?"
+  - id: cadence
+    type: cadence
+    required: true
+    default: "30d"
+    label: "How often?"
+  - id: service_hours
+    type: int
+    default: 50
+    min: 0
+    label: "Estimated service hours"
+
+toggles:
+  - id: photo_evidence
+    label: "Take a photo when done?"
+    default: true
+  - id: escalate
+    label: "Escalate if overdue?"
+    default: false
+
+routine:
+  label: "Asset maintenance"
+  asset: "{{asset}}"
+  cadence:
+    every: "{{cadence}}"
+  evidence:
+    when: photo_evidence
+    type: photo
+    prompt: "Photo of maintenance work"
+  tools:
+    - location.read
+    - tool: notifications.local
+      action: schedule
+      args:
+        title: "Maintenance due"
+        body: "Service after {{service_hours}} hours of use."
+        delay: 0
+  notifications:
+    when: escalate
+    remind_before: "12h"
+    escalate_after: "48h"

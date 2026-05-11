@@ -76,7 +76,7 @@ struct ContentView: View {
             }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.15))
         .cornerRadius(12)
     }
 
@@ -102,7 +102,7 @@ struct ContentView: View {
             }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.15))
         .cornerRadius(12)
     }
 
@@ -122,7 +122,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.15))
         .cornerRadius(12)
     }
 
@@ -136,7 +136,7 @@ struct ContentView: View {
             }
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.gray.opacity(0.15))
         .cornerRadius(12)
     }
 

@@ -64,6 +64,23 @@ cd ../..
 open Package.swift
 ```
 
+### 4. Wire the Compose tab in Xcode
+
+The example app has two tabs: **Run** (existing runbook execution) and
+**Compose** (new template-driven routine authoring). The Compose tab
+needs three things added to the Xcode target manually:
+
+1. Right-click the `HomeAutomationExample` group → **Add Files…** and
+   add `ComposeFlowView.swift` and `ComposeFlowViewModel.swift` with
+   "Add to target: HomeAutomationExample" checked.
+2. Drag the `Resources/templates/` folder onto the same group as a
+   **folder reference** (blue icon, not yellow group). This makes
+   `templates/routine/*.template.yaml` available via
+   `Bundle.main.url(forResource:withExtension:subdirectory:)`.
+3. The view falls back to the workspace path when the bundle resource
+   isn't present, so you can develop in the simulator before doing
+   step 2.
+
 ## How to Run
 
 1. **Build** the GertSDK framework in Xcode
