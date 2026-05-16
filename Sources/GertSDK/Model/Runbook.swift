@@ -2,13 +2,12 @@ import Foundation
 import Yams
 
 // Runbook is the in-memory representation of a runbook/v1 YAML file
-// produced by the gert engine or the gert-domain-home compiler. The
-// structure mirrors the YAML 1:1 — top-level metadata, plus a `flow`
-// of nested step nodes.
+// produced by the gert engine. The structure mirrors the YAML 1:1 —
+// top-level metadata, plus a `flow` of nested step nodes.
 //
-// Only the step kinds emitted by the home compiler today are modelled:
-// tool, collector, noop. Adding branch/parallel/include/iterate later
-// is a matter of extending FlowItem.Kind without breaking callers.
+// Only the step kinds the engine emits today are modelled: tool,
+// collector, noop. Adding branch/parallel/include/iterate later is a
+// matter of extending FlowItem.Kind without breaking callers.
 public struct Runbook: Codable, Sendable {
     public let apiVersion: String
     public let id: String

@@ -2,13 +2,12 @@ import Foundation
 
 // Delegation describes a window during which routines/zones are
 // handed off to another person (e.g. a neighbour while the owner is
-// travelling). The shape mirrors `Delegation` in
-// gert-domain-home/pkg/model and is decoded from the
-// `Delegations` array in property.json.
+// travelling). It is decoded from the `Delegations` array in a
+// property.json file produced by the gert engine.
 //
 // Property.json uses Pascal-case keys because it's emitted via Go's
-// default json encoding of the model struct. The keys here are
-// declared via CodingKeys so Swift call sites can stay camelCase.
+// default json encoding. The keys here are declared via CodingKeys
+// so Swift call sites can stay camelCase.
 public struct Delegation: Codable, Sendable, Equatable {
     public let delegate: Delegate
     public let active: ActiveWindow

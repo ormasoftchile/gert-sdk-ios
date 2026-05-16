@@ -2,6 +2,84 @@
 
 **Embedded gert runbook execution for iOS apps**
 
+`gert-sdk-ios` is a Swift Package that executes gert runbook/v1 documents directly on-device, with offline-first tracing and optional server sync.
+
+## Features
+
+- 📝 Decode runbook/v1 YAML into a typed `Runbook`
+- 🚀 Execute steps via async/await with a `RunSession` event stream
+- 🔌 Pluggable platform handlers for iOS capabilities (camera, location, NFC, biometrics, bluetooth, notifications)
+- 📦 JSONL trace events with optional server sync
+- 🤝 Delegation model decoding from `property.json`
+
+## Requirements
+
+- iOS 16.0+ / macOS 13.0+
+- Xcode 15.0+
+- Swift 5.9+
+
+## Installation
+
+Add `gert-sdk-ios` to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/ormasoftchile/gert-sdk-ios.git", from: "0.1.0")
+]
+```
+
+## Quick Start
+
+```swift
+import GertSDK
+import Yams
+
+// 1. Decode a runbook YAML
+let yaml = try String(contentsOf: runbookURL)
+let runbook = try YAMLDecoder().decode(Runbook.self, from: yaml)
+
+// 2. Configure a runtime with handlers
+let runtime = GertRuntime()
+runtime.handlers.register(CameraHandler())
+
+// 3. Start a run
+let session = runtime.startRun(
+    runbook: runbook,
+    actor: "alice@example.com"
+)
+
+// 4. Stream events
+for await event in session.events {
+    print(event.kind, event.stepID ?? "")
+}
+
+let summary = try await session.wait()
+```
+
+## Supported Capabilities
+
+| Capability | Token | System Framework |
+|------------|-------|------------------|
+| Camera | `capability/camera` | AVFoundation |
+| Location | `capability/location` | CoreLocation |
+| NFC | `capability/nfc` | CoreNFC |
+| Biometrics | `capability/biometrics` | LocalAuthentication |
+| Bluetooth | `capability/bluetooth` | CoreBluetooth |
+| Notifications | `capability/notifications` | UserNotifications |
+
+## License
+
+MIT
+
+## Links
+
+- [gert core engine](https://github.com/ormasoftchile/gert)
+- [gert mobile platform kit](https://github.com/ormasoftchile/gert-mobile-platform)
+- [gert-sdk-android](https://github.com/ormasoftchile/gert-sdk-android) (Android counterpart)
+# gert-sdk-ios
+
+**Embedded gert runbook execution for iOS apps**
+
 `gert-sdk-ios` is a Swift Package that brings the gert runbook engine to iOS. Execute structured, governed runbooks directly on-device with offline-first architecture and optional server sync.
 
 ## Features
